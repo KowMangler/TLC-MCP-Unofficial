@@ -546,7 +546,7 @@ server.registerTool(
   {
     title: 'TLC advancement completion report (Track Advancement heatmap)',
     description:
-      'Replicates the Track Advancement grid: per-step completion by trailman and per-patrol percentages for a badge (default Heritage Branch), plus Branch Pin / Sylvan Star status per patrol and per boy.',
+      'READ-ONLY Track Advancement grid (never touches write endpoints): per step, per boy: earned/not + completion date + tooltip note + purchased/awarded flags, with per-patrol completion % (badge default Heritage Branch, Woodlands Trail Foxes/Hawks/Mountain Lions).',
     inputSchema: {
       badge: z.string().optional().describe('Badge/branch label, e.g. "Heritage Branch", "Values Branch" (default Heritage Branch)'),
       level: z.string().optional().describe('Woodlands Trail (default), Navigators, or Adventurers'),
