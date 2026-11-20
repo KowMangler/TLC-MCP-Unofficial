@@ -5,13 +5,19 @@ Yii2 server-rendered app with **no public API**: everything this server does is 
 authenticated browser session — password login + SMS 2FA, CSRF-token form posts, and HTML
 grid parsing.
 
-> Note: the tool table in the top-level `README.md` predates the two lesson tools. The
-> authoritative tool surface is the **10 tools** listed in this document (see
+> Note: the tool table in the top-level `README.md` predates the five lesson/advancement
+> tools. The authoritative tool surface is the **13 tools** listed in this document (see
 > [ARCHITECTURE.md](ARCHITECTURE.md) for where each lives in code).
 
 ---
 
 ## 1. Prerequisites
+
+**Fastest path:** `./install.sh` at the project root — a Linux installer that checks/installs
+Node (user-local LTS if system node is too old), runs `npm ci`, installs the pinned Playwright
+Chromium, creates the credentials template, and finishes with a stdio smoke test asserting the
+full tool surface. Flags: `--with-deps` (Chromium OS libraries via sudo), `--no-node-install`,
+`--skip-smoke`. The manual steps below are what it automates.
 
 | Requirement | Notes |
 |---|---|
@@ -100,7 +106,7 @@ TLC uses three id prefixes; tools accept/report them:
   `content`, `active` (bool), and `fields` — a raw `Event[...]` → value map for advanced
   overrides of any of the ~87 form fields.
 
-## 7. Tool reference (10 tools)
+## 7. Tool reference (13 tools)
 
 ### `tlc_login` — session control
 - **Args:** `sms_code?` (2FA code, if prompted), `force?` (bool, re-login even if saved session looks valid).
@@ -134,9 +140,23 @@ TLC uses three id prefixes; tools accept/report them:
 - **Returns:** per-event `[{ref, lessons:[{lesson_id, level, patrols, primary_leader, assistants, activity, notes, game_time}]}]`.
 
 ### `tlc_event_add_lesson` — add an activity plan row
-- **Args:** `ref` (meeting `et…`), `branch` (e.g. `"Life Skills Branch"`), `item` (branch item label, substring ok, e.g. `"First Aid - Medical"`), `level?` (**default `Woodlands Trail`**; also `Navigators`, `Adventurers`), `title?` (defaults to the item name, leading numbering stripped), `notes?`, `game_time?`.
-- **Semantics:** replicates the UI cascade — event page badge select → `/databuilder/get-badge-items` (POST `depdrop_parents[0]=<badge id>`) → `Lesson[...]` create post → **re-read the grid to verify the row exists**. Branch and item must each resolve to exactly one match; otherwise you get an error listing the options.
+- **Args:** `ref` (meeting `et…`), `branch` (e.g. `"Life Skills Branch"`), `item` (branch item label, substring ok, e.g. `"First Aid - Medical"`), `level?` (**default `Woodlands Trail`**, which covers all 3 patrols; also `Foxes`, `Hawks`, `Mountain Lions`, `Navigators`, `Adventurers`), `patrols?` (array — scope the lesson to actual patrols instead of a level: `Fox`, `Hawk`, `Mountain Lion`, `Legends`, `Guidon`, `Adventurer`; overrides `level`), `title?` (defaults to the item name, leading numbering stripped), `notes?`, `game_time?`.
+- **Semantics:** replicates the UI cascade — event page badge select → `/databuilder/get-badge-items` (POST `depdrop_parents[0]=<badge id>`) → level/patrol scope → `Lesson[...]` create post → **re-read the grid to verify the row exists**. Branch, item, and each patrol name must each resolve to exactly one match; otherwise you get an error listing the options.
 - **Returns:** `{ok:true, lesson_id, activity, level, item}`.
+
+### `tlc_lesson_delete` — delete one activity plan row
+- **Args:** `lesson_id` (`les…` id, from `tlc_event_lessons` or `tlc_lessons_report`), `ref` (the `et…` of the event it belongs to — used for the CSRF source).
+- **Semantics:** POST `/calendar/delete-lesson?id=les…`, then re-read the event's lesson grid; success requires the row gone.
+- **Returns:** `{ok, lesson_id, verified_gone}`.
+
+### `tlc_lessons_report` — lesson coverage report by patrol
+- **Args:** `from`, `to` (YYYY-MM-DD), `type_filter?` (event-type substring, default matches meetings, e.g. `"Troop meeting"`).
+- **Returns:** per meeting (`date`, `title`, `ref`) its lesson rows with a `covers` list, plus `patrol_coverage` per Woodlands Trail patrol (Foxes / Hawks / Mountain Lions): level-scoped lessons count for all three patrols; patrol-scoped lessons count only for their patrols. Useful for spotting patrols with no planned activity in a window.
+
+### `tlc_advancement_report` — Track Advancement heatmap (read-only)
+- **Args:** `badge?` (branch label, **default `Heritage Branch`**; e.g. `"Values Branch"`), `level?` (**default `Woodlands Trail`**; also `Navigators`, `Adventurers`), `patrols?` (default `Foxes, Hawks, Mountain Lions`).
+- **Returns:** per advancement step: per-patrol completion `n/total (x%)`, `earned_by` (boy, completion date, tooltip note), per-boy cells with `[purchased]`/`[awarded]` flags, and `per_patrol` totals (`steps_earned n/N` per boy).
+- **Safety:** the tool reads only the server-rendered grid fragment (`/advancement/badge-tracker-view`). It **never calls `/advancement/process-advancement`**, which is the site's write/toggle endpoint — treat that route as off-limits in any custom script.
 
 ### `tlc_ical_feeds` — iCal subscription URLs
 - **Args:** none. **Returns:** `{feeds:[urls]}` — troop/area/region/home-office/all + public feeds.

@@ -14,14 +14,14 @@ flowchart TB
 
   subgraph SERVER["tlc-mcp-server — node src/index.js (stdio process)"]
     TRANSPORT["StdioServerTransport<br/>JSON-RPC over stdin/stdout"]
-    subgraph TOOLS["Tool layer — src/index.js (478 lines)"]
+    subgraph TOOLS["Tool layer — src/index.js (694 lines)"]
       TLOGIN["tlc_login"]
       TCAL["tlc_calendar_report · tlc_event_details<br/>tlc_event_create · tlc_event_update · tlc_event_delete"]
-      TLESSON["tlc_event_lessons · tlc_event_add_lesson"]
+      TLESSON["tlc_event_lessons · tlc_event_add_lesson · tlc_lesson_delete<br/>tlc_lessons_report · tlc_advancement_report"]
       TDISC["tlc_ical_feeds · tlc_fetch_page"]
       HELP["helpers: resolveType · fmtTlcDate · mapChanges<br/>formDefaults (cached) · formErrors"]
     end
-    CLIENTLIB["Session/HTTP layer — src/tlc-client.js (259 lines)<br/>login · smsVerify · isAuthed · fetchText · postForm<br/>parseEventForm · crawlViewEvents · parseLessonRows"]
+    CLIENTLIB["Session/HTTP layer — src/tlc-client.js (283 lines)<br/>login · smsVerify · isAuthed · fetchText · postForm · postRaw · formBody<br/>parseEventForm · crawlViewEvents · parseLessonRows"]
   end
 
   subgraph NPM["npm dependencies (3 direct, 97 total packages)"]
@@ -39,6 +39,7 @@ flowchart TB
     AUTH["/login · /site/sms-verify<br/>(LoginForm[...] + _csrf, SMS 2FA, trust device ~30d)"]
     CAL["/calendar · /calendar/view-events (GridView, 50/page)<br/>/calendar/create · /calendar/update/et… · /calendar/delete/ev…"]
     CASCADE["/databuilder/get-badge-items<br/>(Krajee DepDrop cascade, JSON)"]
+    ADV["/advancement/index · /advancement/badge-tracker-view<br/>(read-only grid fragment; process-advancement is a WRITE<br/>toggle the tools never call)"]
     FEEDS["/calendar/ical · /icalendar/&lt;secret tokens&gt;/scope"]
   end
 
@@ -50,6 +51,7 @@ flowchart TB
   CLIENTLIB -- "page (browser) for login/2FA" --> AUTH
   CLIENTLIB -- "context.request (cookie-shared HTTP)" --> CAL
   CLIENTLIB --> CASCADE
+  CLIENTLIB --> ADV
   CLIENTLIB --> FEEDS
   CLIENTLIB <--> STATE
   SERVER --> CREDS
@@ -62,10 +64,11 @@ The MCP surface. Owns **what the agent may say**, not how HTTP works.
 
 - **Registration:** `@modelcontextprotocol/sdk` `McpServer` + `zod` input schemas; one
   `StdioServerTransport` at the bottom of the file (`server.connect(transport)`).
-- **10 registered tools** (line anchors): `tlc_login` (:143), `tlc_calendar_report` (:179),
+- **13 registered tools** (line anchors): `tlc_login` (:143), `tlc_calendar_report` (:179),
   `tlc_event_details` (:218), `tlc_event_create` (:246), `tlc_event_update` (:282),
   `tlc_event_delete` (:311), `tlc_event_lessons` (:342), `tlc_event_add_lesson` (:364),
-  `tlc_ical_feeds` (:446), `tlc_fetch_page` (:462).
+  `tlc_lessons_report` (:474), `tlc_lesson_delete` (:525), `tlc_advancement_report` (:544),
+  `tlc_ical_feeds` (:662), `tlc_fetch_page` (:678).
 - **Friendly→site translation:** `changeParams` (shared zod schema for create/update),
   `mapChanges` (friendly names → `Event[...]` field names), `resolveType` (label/token →
   `event_type_id`, rejects ambiguous matches), `fmtTlcDate` (ISO-ish → the site's
@@ -89,6 +92,8 @@ The single `TLCClient` class; everything site-facing.
 | `ensureAuthed` | `isAuthed` → else re-login with credentials (throws a clear error if credentials absent). |
 | `fetchText(path)` | Authenticated GET; detects `UNAUTHENTICATED` by 302 or the login-page marker. |
 | `postForm(path, fields, {csrfSource})` | Yii form POST. **CSRF is re-extracted per POST** from `meta[name=csrf-token]` or the hidden `_csrf` input of `csrfSource` (tokens rotate). |
+| `postRaw(path, body, headers)` | POST a pre-serialized urlencoded body — **exact bytes**, required where PHP `key[]` array params are involved (Playwright's form serializer mangles them). Used by the advancement grid fragment fetch (10-min timeout). |
+| `formBody(obj)` (static) | Serialize an object into a urlencoded body; arrays become repeated `k[]=v` pairs. Pairs with `postRaw`. |
 | `parseEventForm(html)` | Extracts the `<form id="event-form">` (~87 `Event[...]` inputs/selects/textareas) with current values — the basis of details-read and partial-update. |
 | `crawlViewEvents` | `/calendar/view-events` grid crawler: `data-key="ev…"`, edit links `et…`, cell text by `data-col-seq`, pagination to the max `?page=N`, cap 40 pages. |
 | `parseLessonRows(html)` | Parses the `troop_lessons_grid` sub-grid on an event page (`data-key="les…"` rows). |
@@ -99,8 +104,14 @@ The single `TLCClient` class; everything site-facing.
 - **Krajee widgets:** GridView pagination (50/page), checkbox-x hidden inputs (why `rememberMe`/
   trust checkboxes are set via `el.value='1'`), DepDrop cascade (`POST depdrop_parents[0]=<badge id>`;
   GET-style `depdrop_parents[]=` returns an empty payload).
-- **Level ids hardcoded** in `tlc_event_add_lesson`: `Woodlands Trail=wt`,
-  `Navigators=j8e296a067a3`, `Adventurers=x1ff1de77400` (site-stable ids, not account-specific).
+- **Level/patrol ids hardcoded** in `tlc_event_add_lesson`: levels `Woodlands Trail=wt`,
+  `Navigators=j8e296a067a3`, `Adventurers=x1ff1de77400`; patrol levels `Foxes=l3c59dc048e8`,
+  `Hawks=ib6d767d2f8e`, `Mountain Lions=k37693cfc748` (also used by the advancement report's
+  group selector). Site-stable ids, not account-specific; arbitrary patrols on a given event
+  are resolved from the event page's own select instead of hardcoded ids.
+- **Advancement read/write split:** completion state is read from the server-rendered grid
+  fragment of `/advancement/badge-tracker-view`; `/advancement/process-advancement` is the
+  site's cell-toggle WRITE endpoint and the tools never call it.
 
 ## 3. Session & 2FA flow
 
